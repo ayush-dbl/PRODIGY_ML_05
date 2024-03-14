@@ -1,0 +1,148 @@
+# Import necessary libraries
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Flatten
+
+# Set the directory paths
+data_dir = 'food-101/images/'
+train_dir = os.path.join(data_dir, 'train')
+test_dir = os.path.join(data_dir, 'test')
+
+# Load the food names and calorie information
+food_calories = pd.read_csv('food-101/meta/calories.txt', sep='\t', header=None, names=['food', 'calories'])
+food_calories.head()
+
+
+# Step 1: Data Preparation
+
+# Define data generators with data augmentation for training and validation
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=20,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+# Set batch size
+batch_size = 32
+
+# Generate batches of training and validation data
+train_generator = train_datagen.flow_from_directory(
+    train_dir,
+    target_size=(224, 224),
+    batch_size=batch_size,
+    class_mode='categorical'
+)
+
+test_generator = test_datagen.flow_from_directory(
+    test_dir,
+    target_size=(224, 224),
+    batch_size=batch_size,
+    class_mode='categorical'
+)
+
+# Step 2: Model Selection
+
+# Load the pre-trained VGG16 model without the top (fully connected) layers
+base_model = VGG16(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+
+# Freeze the convolutional base
+base_model.trainable = False
+
+# Print the base model architecture
+base_model.summary()
+
+# Step 3: Model Architecture
+
+# Create a new model by adding custom top layers for food classification
+model = Sequential([
+    base_model,
+    Flatten(),
+    Dense(256, activation='relu'),
+    Dense(101, activation='softmax')  # Number of food categories
+])
+
+# Compile the model
+model.compile(optimizer='adam',
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
+
+# Print the model architecture
+model.summary()
+
+# Step 4: Training
+
+# Set number of training and validation steps
+train_steps = train_generator.samples // batch_size
+test_steps = test_generator.samples // batch_size
+
+# Train the model
+history = model.fit(
+    train_generator,
+    steps_per_epoch=train_steps,
+    epochs=5,
+    validation_data=test_generator,
+    validation_steps=test_steps
+)
+
+# Step 5: Evaluation
+
+# Plot training and validation accuracy
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.title('Training and Validation Accuracy')
+plt.show()
+
+# Plot training and validation loss
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.title('Training and Validation Loss')
+plt.show()
+
+# Step 6: Calorie Estimation
+
+# Extract features from the pre-trained VGG16 model for calorie estimation
+vgg_features = Sequential([
+    base_model,
+    Flatten()
+])
+
+# Extract features for training and testing data
+train_features = vgg_features.predict(train_generator)
+test_features = vgg_features.predict(test_generator)
+
+# Build a regression model for calorie estimation
+calorie_model = Sequential([
+    Dense(256, activation='relu', input_shape=(train_features.shape[1],)),
+    Dense(128, activation='relu'),
+    Dense(1)  # Output layer for calorie estimation
+])
+
+# Compile the calorie estimation model
+calorie_model.compile(optimizer='adam', loss='mean_squared_error')
+
+# Train the calorie estimation model
+calorie_history = calorie_model.fit(
+    train_features,
+    food_calories.iloc[train_generator.index_array]['calories'],
+    epochs=10,
+    validation_data=(test_features, food_calories.iloc[test_generator.index_array]['calories'])
+)
